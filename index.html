@@ -27,6 +27,12 @@ function resize() {
 }
 resize(); window.addEventListener('resize', resize);
 
+// ── Face image ──
+const faceImg = new Image();
+faceImg.src = 'face.jpg';
+let faceLoaded = false;
+faceImg.onload = () => { faceLoaded = true; };
+
 // ── State ──
 let state = 'title'; // title, ready, playing, results
 let mouseX = W / 2;
@@ -163,57 +169,65 @@ function drawGuy(gx) {
   const gy = H * 0.18;
   const bobble = Math.sin(Date.now() / 300) * 2;
 
-  // Body
-  ctx.fillStyle = '#3b82f6';
-  roundRect(gx - 14, gy + 15 + bobble, 28, 35, 6);
+  // Body (white t-shirt like the photo)
+  ctx.fillStyle = '#f0f0f0';
+  roundRect(gx - 16, gy + 28 + bobble, 32, 38, 6);
   ctx.fill();
+  ctx.strokeStyle = '#ddd'; ctx.lineWidth = 1; ctx.stroke();
 
-  // Arms
-  ctx.strokeStyle = '#f4c89a'; ctx.lineWidth = 5; ctx.lineCap = 'round';
-  ctx.beginPath(); ctx.moveTo(gx - 14, gy + 25 + bobble); ctx.lineTo(gx - 28, gy + 40 + bobble); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(gx + 14, gy + 25 + bobble); ctx.lineTo(gx + 28, gy + 40 + bobble); ctx.stroke();
+  // Arms (skin tone)
+  ctx.strokeStyle = '#f0d5b8'; ctx.lineWidth = 6; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(gx - 16, gy + 35 + bobble); ctx.lineTo(gx - 30, gy + 50 + bobble); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(gx + 16, gy + 35 + bobble); ctx.lineTo(gx + 30, gy + 50 + bobble); ctx.stroke();
 
   // Legs
-  ctx.strokeStyle = '#1e40af'; ctx.lineWidth = 6;
-  ctx.beginPath(); ctx.moveTo(gx - 8, gy + 50 + bobble); ctx.lineTo(gx - 12, gy + 70 + bobble); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(gx + 8, gy + 50 + bobble); ctx.lineTo(gx + 12, gy + 70 + bobble); ctx.stroke();
+  ctx.strokeStyle = '#2d3748'; ctx.lineWidth = 7;
+  ctx.beginPath(); ctx.moveTo(gx - 8, gy + 66 + bobble); ctx.lineTo(gx - 12, gy + 88 + bobble); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(gx + 8, gy + 66 + bobble); ctx.lineTo(gx + 12, gy + 88 + bobble); ctx.stroke();
 
-  // Head
-  ctx.fillStyle = '#f4c89a';
-  ctx.beginPath(); ctx.arc(gx, gy + bobble, 18, 0, Math.PI * 2); ctx.fill();
-  ctx.strokeStyle = '#e0a870'; ctx.lineWidth = 1.5; ctx.stroke();
+  // Face photo (circular clip)
+  const faceR = 28;
+  if (faceLoaded) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(gx, gy + bobble, faceR, 0, Math.PI * 2);
+    ctx.clip();
+    // Draw the face image centered and scaled to fill the circle
+    // The photo is a portrait — crop to face area (upper portion)
+    const iw = faceImg.naturalWidth;
+    const ih = faceImg.naturalHeight;
+    // Source crop: focus on face (upper 70% of image, centered)
+    const srcSize = Math.min(iw, ih * 0.75);
+    const sx = (iw - srcSize) / 2;
+    const sy = ih * 0.02;
+    ctx.drawImage(faceImg, sx, sy, srcSize, srcSize, gx - faceR, gy - faceR + bobble, faceR * 2, faceR * 2);
+    ctx.restore();
 
-  // Hair
-  ctx.fillStyle = '#4a3728';
-  ctx.beginPath();
-  ctx.ellipse(gx, gy - 12 + bobble, 19, 10, 0, Math.PI, Math.PI * 2);
-  ctx.fill();
-
-  // Eyes - looking down at toilet
-  ctx.fillStyle = '#fff';
-  ctx.beginPath(); ctx.ellipse(gx - 7, gy - 2 + bobble, 5, 6, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.beginPath(); ctx.ellipse(gx + 7, gy - 2 + bobble, 5, 6, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#333';
-  ctx.beginPath(); ctx.arc(gx - 6, gy + 1 + bobble, 2.5, 0, Math.PI * 2); ctx.fill();
-  ctx.beginPath(); ctx.arc(gx + 8, gy + 1 + bobble, 2.5, 0, Math.PI * 2); ctx.fill();
-
-  // Expression based on combo
-  ctx.strokeStyle = '#333'; ctx.lineWidth = 2; ctx.lineCap = 'round';
-  if (combo > 10) {
-    // Grinning
-    ctx.beginPath(); ctx.arc(gx, gy + 7 + bobble, 7, 0.1, Math.PI - 0.1); ctx.stroke();
-  } else if (messLevel > 50) {
-    // Worried
-    ctx.beginPath(); ctx.arc(gx, gy + 12 + bobble, 5, Math.PI + 0.3, -0.3); ctx.stroke();
-    // Sweat drop
-    ctx.fillStyle = '#87CEEB';
-    ctx.beginPath(); ctx.arc(gx + 20, gy - 5 + bobble + Math.sin(Date.now() / 200) * 3, 3, 0, Math.PI * 2); ctx.fill();
+    // Circle border
+    ctx.beginPath();
+    ctx.arc(gx, gy + bobble, faceR, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
   } else {
-    // Concentrating
-    ctx.beginPath(); ctx.moveTo(gx - 5, gy + 8 + bobble); ctx.lineTo(gx + 5, gy + 8 + bobble); ctx.stroke();
+    // Fallback circle
+    ctx.fillStyle = '#f4c89a';
+    ctx.beginPath(); ctx.arc(gx, gy + bobble, faceR, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#333';
+    ctx.font = '16px serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('😐', gx, gy + 6 + bobble);
   }
 
-  return { x: gx, y: gy + 55 + bobble };
+  // Sweat drop when messy
+  if (messLevel > 50) {
+    ctx.fillStyle = '#87CEEB';
+    ctx.beginPath();
+    ctx.arc(gx + faceR + 5, gy - 10 + bobble + Math.sin(Date.now() / 200) * 3, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  return { x: gx, y: gy + 70 + bobble };
 }
 
 // ── Stream ──
