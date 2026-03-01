@@ -3,789 +3,689 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>Bathroom Disaster Simulator</title>
+<title>Toilet Aim Trainer</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { background: #1a1a2e; color: #fff; font-family: 'Comic Sans MS', 'Chalkboard SE', cursive; overflow: hidden; touch-action: none; }
+body { background: #0f172a; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
 canvas { display: block; }
 </style>
 </head>
 <body>
 <canvas id="game"></canvas>
 <script>
-const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
+const C = document.getElementById('game');
+const ctx = C.getContext('2d');
 
-// Hi-DPI
-let W, H, dpr;
+let W, H, dpr, scale;
 function resize() {
   dpr = window.devicePixelRatio || 1;
   W = window.innerWidth; H = window.innerHeight;
-  canvas.width = W * dpr; canvas.height = H * dpr;
-  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  C.width = W * dpr; C.height = H * dpr;
+  C.style.width = W + 'px'; C.style.height = H + 'px';
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  scale = Math.min(W / 400, H / 700);
 }
 resize(); window.addEventListener('resize', resize);
 
 // ── State ──
-let state = 'menu'; // menu, game1, game2, game3, results
-let score = 0, timeLeft = 0, maxTime = 20;
-let mouseX = W / 2, mouseY = H / 2;
-let particles = [];
-let splashes = [];
-let messLevel = 0; // 0-100
+let state = 'title'; // title, ready, playing, results
+let mouseX = W / 2;
+let score = 0, combo = 0, maxCombo = 0, hits = 0, misses = 0;
+let timeLeft = 0, maxTime = 30;
+let messLevel = 0;
+let difficulty = 1; // ramps up
+let shakeX = 0, shakeY = 0;
 
-// Touch/mouse
-function getPos(e) {
-  const t = e.touches ? e.touches[0] : e;
-  return { x: t.clientX, y: t.clientY };
-}
-canvas.addEventListener('mousemove', e => { mouseX = e.clientX; mouseY = e.clientY; });
-canvas.addEventListener('touchmove', e => { e.preventDefault(); const p = getPos(e); mouseX = p.x; mouseY = p.y; }, { passive: false });
-canvas.addEventListener('touchstart', e => { e.preventDefault(); const p = getPos(e); mouseX = p.x; mouseY = p.y; handleClick(p.x, p.y); }, { passive: false });
-canvas.addEventListener('click', e => handleClick(e.clientX, e.clientY));
+// Toilet
+let toiletX, toiletVX, toiletW = 80;
+// Guy
+let guyX;
+// Visuals
+let puddles = [];
+let drops = [];
+let floaters = [];
+let streamParts = [];
 
-// ── Menu buttons ──
-function getMenuButtons() {
-  const bw = Math.min(300, W * 0.7), bh = 60;
-  const cx = W / 2 - bw / 2;
-  const startY = H * 0.35;
-  return [
-    { x: cx, y: startY, w: bw, h: bh, label: '🚽 Toilet Aim Trainer', game: 'game1' },
-    { x: cx, y: startY + 80, w: bw, h: bh, label: '🧼 Sink Splash Zone', game: 'game2' },
-    { x: cx, y: startY + 160, w: bw, h: bh, label: '🪥 Toothbrush Tornado', game: 'game3' },
-  ];
-}
+// Input
+function getPos(e) { return (e.touches ? e.touches[0] : e).clientX; }
+C.addEventListener('mousemove', e => { mouseX = e.clientX; });
+C.addEventListener('touchmove', e => { e.preventDefault(); mouseX = getPos(e); }, { passive: false });
+C.addEventListener('touchstart', e => { e.preventDefault(); mouseX = getPos(e); handleTap(); }, { passive: false });
+C.addEventListener('click', handleTap);
 
-function handleClick(x, y) {
-  if (state === 'menu') {
-    for (const b of getMenuButtons()) {
-      if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
-        startGame(b.game);
-        return;
-      }
-    }
-  } else if (state === 'results') {
-    state = 'menu';
-  } else if (state === 'game2') {
-    // Pump soap / splash
-    game2Pump();
-  } else if (state === 'game3') {
-    game3Brush();
-  }
+function handleTap() {
+  if (state === 'title') { state = 'ready'; startCountdown(); }
+  else if (state === 'results') { state = 'title'; }
 }
 
-// ── Particle system ──
-function addParticle(x, y, vx, vy, color, life, size) {
-  particles.push({ x, y, vx, vy, color, life, maxLife: life, size: size || 3 });
-}
-function addSplash(x, y, color, text) {
-  splashes.push({ x, y, color, text, life: 60 });
-}
-
-// ══════════════════════════════════════════════
-// GAME 1: Toilet Aim Trainer
-// ══════════════════════════════════════════════
-let toiletX, toiletVX, toiletW, streamActive, streamHits, streamMisses;
-let guyX, guyY;
-let puddleSpots = [];
-
-function startGame(g) {
-  state = g;
-  score = 0; timeLeft = maxTime * 60; particles = []; splashes = []; messLevel = 0;
-  puddleSpots = [];
-  if (g === 'game1') {
-    toiletX = W / 2; toiletVX = 2; toiletW = 70;
-    streamHits = 0; streamMisses = 0;
-    guyX = W / 2; guyY = H * 0.25;
-  } else if (g === 'game2') {
-    sinkX = W / 2; soapPumps = 0; waterOn = false;
-    handX = W / 2; handY = H * 0.55;
-    sinkSplashes = []; waterDrops = [];
-    soapBubbles = [];
-  } else if (g === 'game3') {
-    brushX = W / 2; brushY = H * 0.4;
-    mouthCenterX = W / 2; mouthCenterY = H * 0.45;
-    toothpasteGlobs = []; brushStrokes = 0;
-    mirrorSplats = [];
-  }
+function startCountdown() {
+  let count = 3;
+  const iv = setInterval(() => {
+    count--;
+    if (count <= 0) { clearInterval(iv); startGame(); }
+  }, 700);
 }
 
-function updateGame1() {
-  // Move toilet
-  toiletX += toiletVX;
-  const toiletSpeed = 2 + (1 - timeLeft / (maxTime * 60)) * 4;
-  toiletVX = toiletVX > 0 ? toiletSpeed : -toiletSpeed;
-  if (toiletX > W - toiletW || toiletX < toiletW) toiletVX *= -1;
-
-  // Stream from cursor position
-  guyX = mouseX;
-  const streamEndX = guyX + (Math.random() - 0.5) * 15;
-  const streamEndY = H * 0.75;
-  const toiletLeft = toiletX - toiletW / 2;
-  const toiletRight = toiletX + toiletW / 2;
-  const toiletTop = H * 0.7;
-
-  // Stream particles
-  for (let i = 0; i < 3; i++) {
-    const t = Math.random();
-    const px = guyX + (streamEndX - guyX) * t + (Math.random() - 0.5) * 8 * t;
-    const py = guyY + 60 + (streamEndY - guyY - 60) * t;
-    addParticle(px, py, (Math.random() - 0.5) * 0.5, 1 + Math.random(), '#FFD700', 20, 3);
-  }
-
-  // Check hit
-  if (streamEndX >= toiletLeft && streamEndX <= toiletRight) {
-    streamHits++;
-    score += 2;
-    if (Math.random() < 0.1) addSplash(toiletX, toiletTop, '#FFD700', '+2');
-  } else {
-    streamMisses++;
-    messLevel = Math.min(100, messLevel + 0.3);
-    // Floor puddle
-    puddleSpots.push({ x: streamEndX + (Math.random() - 0.5) * 20, y: streamEndY + Math.random() * 20, r: 3 + Math.random() * 5, a: 0.6 });
-    if (puddleSpots.length > 200) puddleSpots.shift();
-    // Splash particles
-    for (let i = 0; i < 2; i++) {
-      addParticle(streamEndX, streamEndY, (Math.random() - 0.5) * 3, -Math.random() * 3, '#FFD700', 30, 2);
-    }
-  }
+function startGame() {
+  state = 'playing';
+  score = 0; combo = 0; maxCombo = 0; hits = 0; misses = 0;
+  messLevel = 0; difficulty = 1;
+  timeLeft = maxTime * 60;
+  toiletX = W / 2; toiletVX = 2;
+  guyX = W / 2;
+  puddles = []; drops = []; floaters = []; streamParts = [];
 }
 
-function drawGame1() {
-  // Bathroom floor
-  ctx.fillStyle = '#d4c5a9';
-  ctx.fillRect(0, H * 0.7, W, H * 0.3);
-  // Tiles
-  ctx.strokeStyle = '#c4b599';
-  ctx.lineWidth = 1;
-  const tileSize = 40;
-  for (let x = 0; x < W; x += tileSize) {
-    for (let y = H * 0.7; y < H; y += tileSize) {
-      ctx.strokeRect(x, y, tileSize, tileSize);
-    }
-  }
-
-  // Puddles on floor
-  for (const p of puddleSpots) {
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(255, 215, 0, ${p.a})`;
-    ctx.fill();
-  }
-
-  // Toilet
-  const tx = toiletX, ty = H * 0.7;
-  // Base
-  ctx.fillStyle = '#f0f0f0';
+// ── Drawing helpers ──
+function roundRect(x, y, w, h, r) {
   ctx.beginPath();
-  ctx.ellipse(tx, ty + 20, toiletW / 2 + 10, 25, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = '#ccc';
-  ctx.lineWidth = 2;
-  ctx.stroke();
-  // Bowl opening
-  ctx.fillStyle = '#4a90d9';
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y); ctx.arcTo(x + w, y, x + w, y + r, r);
+  ctx.lineTo(x + w, y + h - r); ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+  ctx.lineTo(x + r, y + h); ctx.arcTo(x, y + h, x, y + h - r, r);
+  ctx.lineTo(x, y + r); ctx.arcTo(x, y, x + r, y, r);
+  ctx.closePath();
+}
+
+function drawShadow(x, y, rx, ry) {
+  ctx.save();
   ctx.beginPath();
-  ctx.ellipse(tx, ty, toiletW / 2, 20, 0, 0, Math.PI * 2);
+  ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.15)';
   ctx.fill();
-  ctx.strokeStyle = '#ddd';
-  ctx.stroke();
+  ctx.restore();
+}
+
+// ── Toilet drawing ──
+const floorY = () => H * 0.78;
+
+function drawToilet(tx) {
+  const fy = floorY();
+  const tw = toiletW;
+
+  // Shadow
+  drawShadow(tx, fy + 30, tw * 0.7, 12);
+
   // Tank
   ctx.fillStyle = '#e8e8e8';
-  ctx.fillRect(tx - 25, ty - 50, 50, 35);
-  ctx.strokeStyle = '#ccc';
-  ctx.strokeRect(tx - 25, ty - 50, 50, 35);
+  roundRect(tx - 22, fy - 55, 44, 40, 6);
+  ctx.fill();
+  ctx.strokeStyle = '#d0d0d0'; ctx.lineWidth = 1.5; ctx.stroke();
+  // Tank lid
+  ctx.fillStyle = '#f0f0f0';
+  roundRect(tx - 25, fy - 58, 50, 8, 3);
+  ctx.fill();
+  ctx.strokeStyle = '#d0d0d0'; ctx.stroke();
   // Flush handle
-  ctx.fillStyle = '#c0c0c0';
-  ctx.fillRect(tx + 25, ty - 40, 15, 5);
+  ctx.strokeStyle = '#b0b0b0'; ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.moveTo(tx + 25, fy - 45); ctx.lineTo(tx + 35, fy - 48);
+  ctx.lineTo(tx + 37, fy - 44); ctx.stroke();
 
-  // Guy (stick figure)
-  const gx = guyX, gy = guyY;
-  ctx.strokeStyle = '#333';
-  ctx.lineWidth = 3;
-  // Head
-  ctx.beginPath(); ctx.arc(gx, gy - 15, 15, 0, Math.PI * 2); ctx.stroke();
-  // Eyes
-  ctx.fillStyle = '#333';
-  ctx.beginPath(); ctx.arc(gx - 5, gy - 18, 2, 0, Math.PI * 2); ctx.fill();
-  ctx.beginPath(); ctx.arc(gx + 5, gy - 18, 2, 0, Math.PI * 2); ctx.fill();
-  // Concentrating mouth
-  ctx.beginPath(); ctx.arc(gx, gy - 8, 4, 0, Math.PI); ctx.stroke();
-  // Body
-  ctx.beginPath(); ctx.moveTo(gx, gy); ctx.lineTo(gx, gy + 40); ctx.stroke();
-  // Arms
-  ctx.beginPath(); ctx.moveTo(gx - 20, gy + 15); ctx.lineTo(gx, gy + 25); ctx.lineTo(gx + 20, gy + 15); ctx.stroke();
-  // Legs
-  ctx.beginPath(); ctx.moveTo(gx, gy + 40); ctx.lineTo(gx - 15, gy + 65); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(gx, gy + 40); ctx.lineTo(gx + 15, gy + 65); ctx.stroke();
-
-  // Stream (yellow arc)
-  ctx.strokeStyle = '#FFD700';
-  ctx.lineWidth = 3;
+  // Bowl outer
+  ctx.fillStyle = '#f5f5f5';
   ctx.beginPath();
-  ctx.moveTo(gx, gy + 45);
-  const endX = gx + (Math.random() - 0.5) * 10;
-  ctx.quadraticCurveTo(gx + 5, gy + 80, endX, H * 0.73);
+  ctx.ellipse(tx, fy + 5, tw / 2 + 8, 28, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#ddd'; ctx.lineWidth = 2; ctx.stroke();
+
+  // Seat
+  ctx.fillStyle = '#e0e0e0';
+  ctx.beginPath();
+  ctx.ellipse(tx, fy, tw / 2 + 4, 22, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#ccc'; ctx.lineWidth = 1.5; ctx.stroke();
+
+  // Bowl water
+  const waterGrad = ctx.createRadialGradient(tx, fy, 0, tx, fy, tw / 2 - 5);
+  waterGrad.addColorStop(0, '#7ec8e3');
+  waterGrad.addColorStop(1, '#4a90d9');
+  ctx.fillStyle = waterGrad;
+  ctx.beginPath();
+  ctx.ellipse(tx, fy, tw / 2 - 5, 16, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Bowl rim highlight
+  ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.ellipse(tx, fy - 2, tw / 2 - 8, 12, 0, Math.PI * 1.1, Math.PI * 1.9);
   ctx.stroke();
 
-  // Mess meter
-  drawMessMeter();
-}
-
-// ══════════════════════════════════════════════
-// GAME 2: Sink Splash Zone
-// ══════════════════════════════════════════════
-let sinkX, soapPumps, waterOn, handX, handY;
-let sinkSplashes, waterDrops, soapBubbles;
-
-function game2Pump() {
-  soapPumps++;
-  // Too much soap = mess
-  for (let i = 0; i < 5 + soapPumps * 2; i++) {
-    soapBubbles.push({
-      x: handX + (Math.random() - 0.5) * 40,
-      y: handY + (Math.random() - 0.5) * 20,
-      r: 3 + Math.random() * 6,
-      vx: (Math.random() - 0.5) * 4,
-      vy: -1 - Math.random() * 3,
-      life: 120
-    });
-  }
-  if (soapPumps > 3) {
-    messLevel = Math.min(100, messLevel + 5);
-    addSplash(handX, handY, '#87CEEB', 'TOO MUCH SOAP!');
-  }
-  score += soapPumps <= 3 ? 10 : -5;
-}
-
-function updateGame2() {
-  handX = mouseX;
-  handY = Math.max(H * 0.4, Math.min(H * 0.7, mouseY));
-
-  const sinkCenter = W / 2;
-  const sinkTop = H * 0.55;
-  const sinkW = 160;
-
-  // Water from faucet
-  if (Math.random() < 0.4) {
-    waterDrops.push({
-      x: sinkCenter + (Math.random() - 0.5) * 20,
-      y: sinkTop - 60,
-      vx: (Math.random() - 0.5) * 1,
-      vy: 2 + Math.random() * 2,
-      life: 60
-    });
-  }
-
-  // Update water drops
-  for (const d of waterDrops) {
-    d.x += d.vx; d.y += d.vy; d.vy += 0.2; d.life--;
-    // If hands are near faucet, splash everywhere
-    const dist = Math.hypot(d.x - handX, d.y - handY);
-    if (dist < 30) {
-      d.life = 0;
-      for (let i = 0; i < 3; i++) {
-        sinkSplashes.push({
-          x: d.x, y: d.y,
-          vx: (Math.random() - 0.5) * 8,
-          vy: -2 - Math.random() * 5,
-          life: 40 + Math.random() * 30
-        });
-        messLevel = Math.min(100, messLevel + 0.15);
-      }
-    }
-  }
-  waterDrops = waterDrops.filter(d => d.life > 0);
-
-  // Update splashes
-  for (const s of sinkSplashes) {
-    s.x += s.vx; s.y += s.vy; s.vy += 0.15; s.life--;
-  }
-  sinkSplashes = sinkSplashes.filter(s => s.life > 0);
-
-  // Update soap bubbles
-  for (const b of soapBubbles) {
-    b.x += b.vx; b.y += b.vy; b.vy += 0.05; b.life--;
-    // Bubbles that fly far = mess
-    if (b.y < sinkTop - 80 || Math.abs(b.x - sinkCenter) > sinkW) {
-      messLevel = Math.min(100, messLevel + 0.1);
-    }
-  }
-  soapBubbles = soapBubbles.filter(b => b.life > 0);
-
-  // Score for keeping hands in sink area
-  if (Math.abs(handX - sinkCenter) < sinkW / 2 && handY > sinkTop - 20 && handY < sinkTop + 60) {
-    score += 0.5;
-  }
-}
-
-function drawGame2() {
-  // Counter
-  ctx.fillStyle = '#8B7355';
-  ctx.fillRect(0, H * 0.5, W, H * 0.5);
-
-  // Sink basin
-  const sx = W / 2, sy = H * 0.6;
+  // Base
   ctx.fillStyle = '#e8e8e8';
-  ctx.beginPath();
-  ctx.ellipse(sx, sy, 90, 40, 0, 0, Math.PI * 2);
+  roundRect(tx - 18, fy + 18, 36, 15, 4);
   ctx.fill();
-  ctx.fillStyle = '#4a90d9';
-  ctx.beginPath();
-  ctx.ellipse(sx, sy, 75, 30, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Faucet
-  ctx.fillStyle = '#c0c0c0';
-  ctx.fillRect(sx - 8, sy - 80, 16, 50);
-  ctx.beginPath();
-  ctx.arc(sx, sy - 80, 12, Math.PI, 0);
-  ctx.fill();
-  // Spout
-  ctx.fillRect(sx + 5, sy - 75, 25, 8);
-  ctx.fillRect(sx + 25, sy - 75, 8, 20);
-
-  // Water stream from faucet
-  ctx.strokeStyle = 'rgba(74, 144, 217, 0.6)';
-  ctx.lineWidth = 4;
-  ctx.beginPath();
-  ctx.moveTo(sx + 29, sy - 55);
-  ctx.lineTo(sx + 29 + (Math.random() - 0.5) * 3, sy - 10);
-  ctx.stroke();
-
-  // Soap dispenser
-  ctx.fillStyle = '#f5deb3';
-  ctx.fillRect(sx + 110, sy - 60, 30, 50);
-  ctx.fillStyle = '#daa520';
-  ctx.fillRect(sx + 118, sy - 75, 14, 20);
-  ctx.fillRect(sx + 110, sy - 75, 30, 5);
-
-  // Water splashes
-  for (const s of sinkSplashes) {
-    ctx.beginPath();
-    ctx.arc(s.x, s.y, 2 + Math.random() * 2, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(74, 144, 217, ${s.life / 40})`;
-    ctx.fill();
-  }
-
-  // Soap bubbles
-  for (const b of soapBubbles) {
-    ctx.beginPath();
-    ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(255, 255, 255, ${b.life / 120 * 0.7})`;
-    ctx.fill();
-    ctx.strokeStyle = `rgba(135, 206, 235, ${b.life / 120 * 0.5})`;
-    ctx.lineWidth = 1;
-    ctx.stroke();
-    // Sheen
-    ctx.beginPath();
-    ctx.arc(b.x - b.r * 0.3, b.y - b.r * 0.3, b.r * 0.3, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(255, 255, 255, ${b.life / 120 * 0.4})`;
-    ctx.fill();
-  }
-
-  // Hands
-  ctx.fillStyle = '#f4c89a';
-  ctx.beginPath();
-  ctx.ellipse(handX - 12, handY, 18, 12, -0.2, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.ellipse(handX + 12, handY, 18, 12, 0.2, 0, Math.PI * 2);
-  ctx.fill();
-  // Fingers
-  for (let i = -1; i <= 1; i++) {
-    ctx.beginPath();
-    ctx.ellipse(handX - 12 + i * 8, handY - 10, 4, 8, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.ellipse(handX + 12 + i * 8, handY - 10, 4, 8, 0, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // Floor splashes (mess indicator)
-  if (messLevel > 10) {
-    for (let i = 0; i < messLevel / 5; i++) {
-      const px = W * 0.2 + (i * 37 % (W * 0.6));
-      const py = H * 0.85 + (i * 23 % (H * 0.1));
-      ctx.beginPath();
-      ctx.ellipse(px, py, 5 + (i % 5), 3, i * 0.5, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(74, 144, 217, 0.3)';
-      ctx.fill();
-    }
-  }
-
-  // Instructions
-  ctx.fillStyle = 'rgba(255,255,255,0.6)';
-  ctx.font = '14px "Comic Sans MS"';
-  ctx.textAlign = 'center';
-  ctx.fillText('Move hands with mouse/finger • Tap to pump soap', W / 2, H * 0.38);
-
-  drawMessMeter();
+  ctx.strokeStyle = '#d0d0d0'; ctx.lineWidth = 1; ctx.stroke();
 }
 
-// ══════════════════════════════════════════════
-// GAME 3: Toothbrush Tornado
-// ══════════════════════════════════════════════
-let brushX, brushY, mouthCenterX, mouthCenterY;
-let toothpasteGlobs, brushStrokes, mirrorSplats;
+// ── Guy drawing ──
+function drawGuy(gx) {
+  const gy = H * 0.18;
+  const bobble = Math.sin(Date.now() / 300) * 2;
 
-function game3Brush() {
-  brushStrokes++;
-  // Splatter toothpaste based on distance from mouth
-  const dist = Math.hypot(brushX - mouthCenterX, brushY - mouthCenterY);
-  const wildness = Math.max(0, dist - 30) / 50;
+  // Body
+  ctx.fillStyle = '#3b82f6';
+  roundRect(gx - 14, gy + 15 + bobble, 28, 35, 6);
+  ctx.fill();
 
-  for (let i = 0; i < 2 + wildness * 5; i++) {
-    toothpasteGlobs.push({
-      x: brushX + (Math.random() - 0.5) * 30,
-      y: brushY + (Math.random() - 0.5) * 30,
-      vx: (Math.random() - 0.5) * (3 + wildness * 5),
-      vy: -2 - Math.random() * (3 + wildness * 3),
-      r: 2 + Math.random() * 4,
-      life: 90,
-      color: Math.random() < 0.7 ? '#87CEEB' : '#FFFFFF'
-    });
-  }
+  // Arms
+  ctx.strokeStyle = '#f4c89a'; ctx.lineWidth = 5; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(gx - 14, gy + 25 + bobble); ctx.lineTo(gx - 28, gy + 40 + bobble); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(gx + 14, gy + 25 + bobble); ctx.lineTo(gx + 28, gy + 40 + bobble); ctx.stroke();
 
-  if (dist < 40) {
-    score += 15;
-  } else {
-    messLevel = Math.min(100, messLevel + 2);
-    score -= 5;
-  }
-}
+  // Legs
+  ctx.strokeStyle = '#1e40af'; ctx.lineWidth = 6;
+  ctx.beginPath(); ctx.moveTo(gx - 8, gy + 50 + bobble); ctx.lineTo(gx - 12, gy + 70 + bobble); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(gx + 8, gy + 50 + bobble); ctx.lineTo(gx + 12, gy + 70 + bobble); ctx.stroke();
 
-function updateGame3() {
-  brushX = mouseX;
-  brushY = mouseY;
-
-  // Mouth bobs slightly
-  mouthCenterX = W / 2 + Math.sin(Date.now() / 1000) * 10;
-  mouthCenterY = H * 0.45 + Math.cos(Date.now() / 800) * 5;
-
-  // Update toothpaste globs
-  for (const g of toothpasteGlobs) {
-    g.x += g.vx; g.y += g.vy; g.vy += 0.1; g.life--;
-    // Hit mirror (top area)
-    if (g.y < H * 0.15 && g.life > 20) {
-      mirrorSplats.push({ x: g.x, y: g.y, r: g.r + 2, color: g.color });
-      g.life = 0;
-      messLevel = Math.min(100, messLevel + 0.5);
-    }
-  }
-  toothpasteGlobs = toothpasteGlobs.filter(g => g.life > 0);
-
-  // Auto-brushing particles when near mouth
-  const dist = Math.hypot(brushX - mouthCenterX, brushY - mouthCenterY);
-  if (dist < 50) {
-    score += 0.3;
-    if (Math.random() < 0.3) {
-      toothpasteGlobs.push({
-        x: brushX + (Math.random() - 0.5) * 20,
-        y: brushY,
-        vx: (Math.random() - 0.5) * 2,
-        vy: -1 - Math.random() * 2,
-        r: 1 + Math.random() * 2,
-        life: 50,
-        color: Math.random() < 0.5 ? '#87CEEB' : 'rgba(255,255,255,0.8)'
-      });
-    }
-  }
-}
-
-function drawGame3() {
-  // Mirror
-  ctx.fillStyle = '#a8d5e2';
-  ctx.fillRect(W * 0.15, H * 0.05, W * 0.7, H * 0.3);
-  ctx.strokeStyle = '#8B7355';
-  ctx.lineWidth = 8;
-  ctx.strokeRect(W * 0.15, H * 0.05, W * 0.7, H * 0.3);
-  // Mirror reflection
-  const grad = ctx.createLinearGradient(W * 0.15, H * 0.05, W * 0.85, H * 0.35);
-  grad.addColorStop(0, 'rgba(255,255,255,0.15)');
-  grad.addColorStop(0.5, 'rgba(255,255,255,0.05)');
-  grad.addColorStop(1, 'rgba(255,255,255,0.1)');
-  ctx.fillStyle = grad;
-  ctx.fillRect(W * 0.15, H * 0.05, W * 0.7, H * 0.3);
-
-  // Mirror splats
-  for (const s of mirrorSplats) {
-    ctx.beginPath();
-    ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
-    ctx.fillStyle = s.color;
-    ctx.fill();
-    // Drip
-    ctx.beginPath();
-    ctx.ellipse(s.x, s.y + s.r + 3, s.r * 0.5, s.r * 0.8, 0, 0, Math.PI * 2);
-    ctx.fillStyle = s.color;
-    ctx.fill();
-  }
-
-  // Sink/counter
-  ctx.fillStyle = '#d4c5a9';
-  ctx.fillRect(0, H * 0.7, W, H * 0.3);
-
-  // Face (simple cartoon)
-  const fx = mouthCenterX, fy = mouthCenterY - 30;
   // Head
   ctx.fillStyle = '#f4c89a';
-  ctx.beginPath();
-  ctx.ellipse(fx, fy, 50, 60, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = '#d4a574';
-  ctx.lineWidth = 2;
-  ctx.stroke();
-  // Eyes
-  ctx.fillStyle = '#333';
-  ctx.beginPath(); ctx.arc(fx - 18, fy - 15, 5, 0, Math.PI * 2); ctx.fill();
-  ctx.beginPath(); ctx.arc(fx + 18, fy - 15, 5, 0, Math.PI * 2); ctx.fill();
-  // Eye whites
-  ctx.fillStyle = '#fff';
-  ctx.beginPath(); ctx.arc(fx - 18, fy - 15, 7, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#333';
-  ctx.beginPath(); ctx.arc(fx - 16, fy - 15, 3, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#fff';
-  ctx.beginPath(); ctx.arc(fx + 18, fy - 15, 7, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#333';
-  ctx.beginPath(); ctx.arc(fx + 20, fy - 15, 3, 0, Math.PI * 2); ctx.fill();
-  // Nose
-  ctx.beginPath(); ctx.moveTo(fx, fy - 5); ctx.lineTo(fx - 6, fy + 8); ctx.lineTo(fx + 6, fy + 8); ctx.closePath();
-  ctx.fillStyle = '#e8b88a'; ctx.fill();
-  // Open mouth
-  ctx.fillStyle = '#8B0000';
-  ctx.beginPath();
-  ctx.ellipse(mouthCenterX, mouthCenterY, 25, 18, 0, 0, Math.PI * 2);
-  ctx.fill();
-  // Teeth
-  ctx.fillStyle = '#fff';
-  for (let i = -3; i <= 3; i++) {
-    ctx.fillRect(mouthCenterX + i * 7 - 3, mouthCenterY - 12, 6, 8);
-    ctx.fillRect(mouthCenterX + i * 7 - 3, mouthCenterY + 4, 6, 8);
-  }
+  ctx.beginPath(); ctx.arc(gx, gy + bobble, 18, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#e0a870'; ctx.lineWidth = 1.5; ctx.stroke();
+
   // Hair
   ctx.fillStyle = '#4a3728';
   ctx.beginPath();
-  ctx.ellipse(fx, fy - 55, 52, 20, 0, Math.PI, Math.PI * 2);
+  ctx.ellipse(gx, gy - 12 + bobble, 19, 10, 0, Math.PI, Math.PI * 2);
   ctx.fill();
 
-  // Toothpaste globs flying
-  for (const g of toothpasteGlobs) {
-    ctx.beginPath();
-    ctx.arc(g.x, g.y, g.r, 0, Math.PI * 2);
-    ctx.fillStyle = g.color;
-    ctx.fill();
+  // Eyes - looking down at toilet
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.ellipse(gx - 7, gy - 2 + bobble, 5, 6, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(gx + 7, gy - 2 + bobble, 5, 6, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#333';
+  ctx.beginPath(); ctx.arc(gx - 6, gy + 1 + bobble, 2.5, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(gx + 8, gy + 1 + bobble, 2.5, 0, Math.PI * 2); ctx.fill();
+
+  // Expression based on combo
+  ctx.strokeStyle = '#333'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+  if (combo > 10) {
+    // Grinning
+    ctx.beginPath(); ctx.arc(gx, gy + 7 + bobble, 7, 0.1, Math.PI - 0.1); ctx.stroke();
+  } else if (messLevel > 50) {
+    // Worried
+    ctx.beginPath(); ctx.arc(gx, gy + 12 + bobble, 5, Math.PI + 0.3, -0.3); ctx.stroke();
+    // Sweat drop
+    ctx.fillStyle = '#87CEEB';
+    ctx.beginPath(); ctx.arc(gx + 20, gy - 5 + bobble + Math.sin(Date.now() / 200) * 3, 3, 0, Math.PI * 2); ctx.fill();
+  } else {
+    // Concentrating
+    ctx.beginPath(); ctx.moveTo(gx - 5, gy + 8 + bobble); ctx.lineTo(gx + 5, gy + 8 + bobble); ctx.stroke();
   }
 
-  // Toothbrush at cursor
-  const bx = brushX, by = brushY;
-  // Handle
-  ctx.fillStyle = '#3498db';
-  ctx.save();
-  ctx.translate(bx, by);
-  ctx.rotate(0.3);
-  ctx.fillRect(-4, -40, 8, 50);
-  // Bristles
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(-6, -45, 12, 10);
-  // Toothpaste on brush
-  ctx.fillStyle = '#87CEEB';
-  ctx.beginPath();
-  ctx.ellipse(0, -48, 5, 3, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-
-  // Instructions
-  ctx.fillStyle = 'rgba(255,255,255,0.6)';
-  ctx.font = '14px "Comic Sans MS"';
-  ctx.textAlign = 'center';
-  ctx.fillText('Guide brush to mouth • Tap to brush • Don\'t splatter the mirror!', W / 2, H * 0.92);
-
-  drawMessMeter();
+  return { x: gx, y: gy + 55 + bobble };
 }
 
-// ── Shared UI ──
-function drawMessMeter() {
-  const bw = 150, bh = 20;
-  const bx = W - bw - 20, by = 50;
+// ── Stream ──
+function drawStream(fromX, fromY, toX, toY, hitting) {
+  // Arc path
+  const midY = (fromY + toY) / 2;
+  const sway = Math.sin(Date.now() / 150) * 5 * difficulty;
 
-  ctx.fillStyle = 'rgba(0,0,0,0.5)';
-  ctx.fillRect(bx - 2, by - 2, bw + 4, bh + 4);
-  ctx.fillStyle = '#333';
-  ctx.fillRect(bx, by, bw, bh);
+  ctx.strokeStyle = hitting ? '#FFD700' : '#FFEC80';
+  ctx.lineWidth = hitting ? 4 : 3;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(fromX, fromY);
+  ctx.bezierCurveTo(
+    fromX + sway, midY - 20,
+    toX - sway * 0.5, midY + 30,
+    toX + (Math.random() - 0.5) * 4, toY
+  );
+  ctx.stroke();
 
-  const color = messLevel < 30 ? '#22c55e' : messLevel < 60 ? '#eab308' : '#ef4444';
-  ctx.fillStyle = color;
-  ctx.fillRect(bx, by, bw * (messLevel / 100), bh);
+  // Glow
+  ctx.strokeStyle = 'rgba(255, 215, 0, 0.2)';
+  ctx.lineWidth = 8;
+  ctx.beginPath();
+  ctx.moveTo(fromX, fromY);
+  ctx.bezierCurveTo(fromX + sway, midY - 20, toX - sway * 0.5, midY + 30, toX, toY);
+  ctx.stroke();
 
-  ctx.fillStyle = '#fff';
-  ctx.font = 'bold 11px "Comic Sans MS"';
-  ctx.textAlign = 'center';
-  ctx.fillText(`MESS: ${Math.floor(messLevel)}%`, bx + bw / 2, by + 14);
+  // Stream droplets
+  for (let i = 0; i < 2; i++) {
+    const t = Math.random();
+    const dx = fromX + (toX - fromX) * t + (Math.random() - 0.5) * 10 * t;
+    const dy = fromY + (toY - fromY) * t * t; // gravity curve
+    drops.push({ x: dx, y: dy, vx: (Math.random() - 0.5) * 0.5, vy: 0.5 + Math.random(), life: 15, r: 1 + Math.random() * 1.5 });
+  }
+}
+
+// ── Floor / bathroom ──
+function drawBathroom() {
+  // Wall
+  const wallGrad = ctx.createLinearGradient(0, 0, 0, floorY());
+  wallGrad.addColorStop(0, '#d4e6f1');
+  wallGrad.addColorStop(1, '#b8d4e3');
+  ctx.fillStyle = wallGrad;
+  ctx.fillRect(0, 0, W, floorY());
+
+  // Tile lines on wall
+  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+  ctx.lineWidth = 1;
+  const ts = 50 * scale;
+  for (let x = 0; x < W; x += ts) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, floorY()); ctx.stroke();
+  }
+  for (let y = 0; y < floorY(); y += ts) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+
+  // Floor
+  const floorGrad = ctx.createLinearGradient(0, floorY(), 0, H);
+  floorGrad.addColorStop(0, '#c9b896');
+  floorGrad.addColorStop(1, '#b8a882');
+  ctx.fillStyle = floorGrad;
+  ctx.fillRect(0, floorY(), W, H - floorY());
+
+  // Floor tiles
+  ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+  const ft = 45;
+  for (let x = 0; x < W; x += ft) {
+    for (let y = floorY(); y < H; y += ft) {
+      ctx.strokeRect(x, y, ft, ft);
+    }
+  }
+
+  // Puddles
+  for (const p of puddles) {
+    ctx.beginPath();
+    ctx.ellipse(p.x, p.y, p.r * 1.5, p.r * 0.6, p.a || 0, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255, 215, 0, ${p.opacity * 0.4})`;
+    ctx.fill();
+    // Highlight
+    ctx.beginPath();
+    ctx.ellipse(p.x - p.r * 0.3, p.y - p.r * 0.1, p.r * 0.4, p.r * 0.15, 0, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255, 235, 100, ${p.opacity * 0.2})`;
+    ctx.fill();
+  }
+}
+
+// ── HUD ──
+function drawHUD() {
+  // Top bar bg
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+  roundRect(10, 8, W - 20, 44, 12);
+  ctx.fill();
 
   // Score
-  ctx.font = 'bold 18px "Comic Sans MS"';
+  ctx.fillStyle = '#FFD700';
+  ctx.font = `bold ${16 * Math.min(scale, 1.3)}px system-ui, sans-serif`;
   ctx.textAlign = 'left';
-  ctx.fillText(`Score: ${Math.floor(score)}`, 20, 40);
+  ctx.fillText(`⭐ ${Math.floor(score)}`, 24, 36);
 
   // Timer
   const secs = Math.ceil(timeLeft / 60);
-  ctx.fillStyle = secs <= 5 ? '#ef4444' : '#fff';
-  ctx.font = 'bold 18px "Comic Sans MS"';
+  ctx.fillStyle = secs <= 5 ? '#ef4444' : '#e2e8f0';
+  ctx.font = `bold ${18 * Math.min(scale, 1.3)}px system-ui, sans-serif`;
   ctx.textAlign = 'center';
-  ctx.fillText(`⏱ ${secs}s`, W / 2, 40);
+  ctx.fillText(`${secs}s`, W / 2, 36);
+
+  // Combo
+  if (combo > 2) {
+    ctx.fillStyle = combo > 15 ? '#f59e0b' : combo > 8 ? '#22c55e' : '#3b82f6';
+    ctx.font = `bold ${14 * Math.min(scale, 1.3)}px system-ui, sans-serif`;
+    ctx.textAlign = 'right';
+    ctx.fillText(`🔥 x${combo}`, W - 24, 36);
+  }
+
+  // Mess meter (bottom)
+  const mw = Math.min(250, W * 0.6), mh = 10;
+  const mx = (W - mw) / 2, my = H - 30;
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.7)';
+  roundRect(mx - 4, my - 4, mw + 8, mh + 8, 8);
+  ctx.fill();
+
+  ctx.fillStyle = '#1e293b';
+  roundRect(mx, my, mw, mh, 5);
+  ctx.fill();
+
+  const mc = messLevel < 30 ? '#22c55e' : messLevel < 60 ? '#eab308' : '#ef4444';
+  const messGrad = ctx.createLinearGradient(mx, 0, mx + mw * (messLevel / 100), 0);
+  messGrad.addColorStop(0, mc);
+  messGrad.addColorStop(1, mc + '99');
+  ctx.fillStyle = messGrad;
+  roundRect(mx, my, mw * (messLevel / 100), mh, 5);
+  ctx.fill();
+
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.font = `${10}px system-ui, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.fillText(`MESS ${Math.floor(messLevel)}%`, W / 2, my - 6);
 }
 
-function drawMenu() {
+// ── Title Screen ──
+function drawTitle() {
+  // BG gradient
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#0f172a');
+  bg.addColorStop(1, '#1e293b');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  // Floating particles
+  const t = Date.now() / 1000;
+  ctx.globalAlpha = 0.06;
+  for (let i = 0; i < 20; i++) {
+    const px = (W * 0.1 + i * 47) % W;
+    const py = (H * 0.1 + i * 73 + Math.sin(t + i) * 40) % H;
+    ctx.beginPath(); ctx.arc(px, py, 20 + i * 2, 0, Math.PI * 2);
+    ctx.fillStyle = i % 2 ? '#3b82f6' : '#FFD700';
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // Toilet emoji
+  ctx.font = `${80 * Math.min(scale, 1.5)}px serif`;
+  ctx.textAlign = 'center';
+  ctx.fillText('🚽', W / 2, H * 0.22);
+
   // Title
   ctx.fillStyle = '#fff';
-  ctx.font = 'bold 36px "Comic Sans MS"';
-  ctx.textAlign = 'center';
-  ctx.fillText('🚽 BATHROOM DISASTER', W / 2, H * 0.15);
-  ctx.font = 'bold 28px "Comic Sans MS"';
+  ctx.font = `bold ${32 * Math.min(scale, 1.3)}px system-ui, sans-serif`;
+  ctx.fillText('TOILET AIM', W / 2, H * 0.34);
   ctx.fillStyle = '#FFD700';
-  ctx.fillText('SIMULATOR', W / 2, H * 0.22);
+  ctx.font = `bold ${38 * Math.min(scale, 1.3)}px system-ui, sans-serif`;
+  ctx.fillText('TRAINER', W / 2, H * 0.41);
 
-  ctx.font = '16px "Comic Sans MS"';
+  // Subtitle
   ctx.fillStyle = '#94a3b8';
-  ctx.fillText('For everyone who can\'t use a bathroom properly', W / 2, H * 0.28);
+  ctx.font = `${14 * Math.min(scale, 1.2)}px system-ui, sans-serif`;
+  ctx.fillText('Can you keep it in the bowl?', W / 2, H * 0.47);
 
-  // Buttons
-  for (const b of getMenuButtons()) {
-    const hover = mouseX >= b.x && mouseX <= b.x + b.w && mouseY >= b.y && mouseY <= b.y + b.h;
-    ctx.fillStyle = hover ? '#3b82f6' : '#1e293b';
-    ctx.strokeStyle = hover ? '#60a5fa' : '#334155';
-    ctx.lineWidth = 2;
-    // Rounded rect
-    const r = 12;
-    ctx.beginPath();
-    ctx.moveTo(b.x + r, b.y);
-    ctx.lineTo(b.x + b.w - r, b.y);
-    ctx.arcTo(b.x + b.w, b.y, b.x + b.w, b.y + r, r);
-    ctx.lineTo(b.x + b.w, b.y + b.h - r);
-    ctx.arcTo(b.x + b.w, b.y + b.h, b.x + b.w - r, b.y + b.h, r);
-    ctx.lineTo(b.x + r, b.y + b.h);
-    ctx.arcTo(b.x, b.y + b.h, b.x, b.y + b.h - r, r);
-    ctx.lineTo(b.x, b.y + r);
-    ctx.arcTo(b.x, b.y, b.x + r, b.y, r);
-    ctx.closePath();
-    ctx.fill(); ctx.stroke();
+  // Start button
+  const bw = Math.min(220, W * 0.55), bh = 56;
+  const bx = W / 2 - bw / 2, by = H * 0.56;
+  const btnGrad = ctx.createLinearGradient(bx, by, bx, by + bh);
+  btnGrad.addColorStop(0, '#3b82f6');
+  btnGrad.addColorStop(1, '#2563eb');
+  ctx.fillStyle = btnGrad;
+  roundRect(bx, by, bw, bh, 16);
+  ctx.fill();
+  // Button glow
+  ctx.shadowColor = '#3b82f6'; ctx.shadowBlur = 20;
+  roundRect(bx, by, bw, bh, 16); ctx.fill();
+  ctx.shadowBlur = 0;
 
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 18px "Comic Sans MS"';
-    ctx.textAlign = 'center';
-    ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + 6);
-  }
+  ctx.fillStyle = '#fff';
+  ctx.font = `bold ${20 * Math.min(scale, 1.2)}px system-ui, sans-serif`;
+  ctx.fillText('TAP TO START', W / 2, by + bh / 2 + 7);
 
-  // Floating emojis
-  const t = Date.now() / 1000;
-  const emojis = ['🚽', '🧼', '🪥', '💦', '🧻', '🫧'];
-  for (let i = 0; i < emojis.length; i++) {
-    const ex = W * 0.1 + (i * W * 0.15);
-    const ey = H * 0.8 + Math.sin(t + i * 1.2) * 20;
-    ctx.font = '30px serif';
-    ctx.fillText(emojis[i], ex, ey);
-  }
+  // Controls hint
+  ctx.fillStyle = '#64748b';
+  ctx.font = `${12 * Math.min(scale, 1.2)}px system-ui, sans-serif`;
+  ctx.fillText('Move your finger or mouse to aim', W / 2, H * 0.72);
+
+  // High score area
+  ctx.fillStyle = '#475569';
+  ctx.font = `${13 * Math.min(scale, 1.2)}px system-ui, sans-serif`;
+  const hs = localStorage.getItem('toilet_hs') || 0;
+  if (hs > 0) ctx.fillText(`Best: ⭐ ${hs}`, W / 2, H * 0.82);
+
+  // Version
+  ctx.fillStyle = '#334155';
+  ctx.font = `${10}px system-ui, sans-serif`;
+  ctx.fillText('v1.0 — a game about bathroom accuracy', W / 2, H * 0.95);
 }
 
-function drawResults() {
-  ctx.fillStyle = '#fff';
-  ctx.font = 'bold 36px "Comic Sans MS"';
+// ── Ready countdown ──
+function drawReady() {
+  drawBathroom();
+  drawToilet(W / 2);
+
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.6)';
+  ctx.fillRect(0, 0, W, H);
+
+  const elapsed = Date.now() % 2100;
+  const num = elapsed < 700 ? '3' : elapsed < 1400 ? '2' : '1';
+  const pulse = 1 + Math.sin(elapsed / 100) * 0.1;
+
+  ctx.save();
+  ctx.translate(W / 2, H / 2);
+  ctx.scale(pulse, pulse);
+  ctx.fillStyle = '#FFD700';
+  ctx.font = `bold ${80}px system-ui, sans-serif`;
   ctx.textAlign = 'center';
-  ctx.fillText('TIME\'S UP!', W / 2, H * 0.2);
+  ctx.fillText(num, 0, 30);
+  ctx.restore();
 
-  const grade = messLevel < 20 ? { letter: 'A+', comment: 'Mom would be proud! 🌟', color: '#22c55e' }
-    : messLevel < 40 ? { letter: 'B', comment: 'Not bad... for an amateur 😏', color: '#84cc16' }
-    : messLevel < 60 ? { letter: 'C', comment: 'The bathroom has seen better days 😬', color: '#eab308' }
-    : messLevel < 80 ? { letter: 'D', comment: 'Did a tornado hit the bathroom?! 🌪️', color: '#f97316' }
-    : { letter: 'F', comment: 'You ARE the mess. Legendary. 💀', color: '#ef4444' };
-
-  ctx.font = 'bold 80px "Comic Sans MS"';
-  ctx.fillStyle = grade.color;
-  ctx.fillText(grade.letter, W / 2, H * 0.42);
-
-  ctx.font = '20px "Comic Sans MS"';
-  ctx.fillStyle = '#fff';
-  ctx.fillText(`Score: ${Math.floor(score)}`, W / 2, H * 0.52);
-  ctx.fillText(`Mess Level: ${Math.floor(messLevel)}%`, W / 2, H * 0.58);
-
-  ctx.font = '18px "Comic Sans MS"';
   ctx.fillStyle = '#94a3b8';
-  ctx.fillText(grade.comment, W / 2, H * 0.67);
-
-  ctx.font = '16px "Comic Sans MS"';
-  ctx.fillStyle = '#60a5fa';
-  ctx.fillText('Tap anywhere to go back', W / 2, H * 0.8);
+  ctx.font = `${16}px system-ui, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.fillText('GET READY...', W / 2, H / 2 + 70);
 }
 
-// ── Main Loop ──
-function update() {
-  if (state.startsWith('game')) {
-    timeLeft--;
-    if (timeLeft <= 0) {
-      state = 'results';
-      return;
-    }
-    if (state === 'game1') updateGame1();
-    else if (state === 'game2') updateGame2();
-    else if (state === 'game3') updateGame3();
+// ── Results ──
+function drawResults() {
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#0f172a');
+  bg.addColorStop(1, '#1e293b');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
 
-    // Update particles
-    for (const p of particles) {
-      p.x += p.vx; p.y += p.vy; p.vy += 0.05; p.life--;
-    }
-    particles = particles.filter(p => p.life > 0);
+  const accuracy = hits + misses > 0 ? Math.round(hits / (hits + misses) * 100) : 0;
+  const grade = messLevel < 15 ? { l: 'S', c: '#a855f7', e: '🏆', t: 'LEGENDARY AIM' }
+    : messLevel < 30 ? { l: 'A', c: '#22c55e', e: '🌟', t: 'Bathroom-ready!' }
+    : messLevel < 50 ? { l: 'B', c: '#84cc16', e: '👍', t: 'Getting there...' }
+    : messLevel < 65 ? { l: 'C', c: '#eab308', e: '😬', t: 'Needs practice' }
+    : messLevel < 80 ? { l: 'D', c: '#f97316', e: '🌊', t: 'Floor is lava... of pee' }
+    : { l: 'F', c: '#ef4444', e: '💀', t: 'You ARE the disaster' };
 
-    // Update splashes
-    for (const s of splashes) s.life--;
-    splashes = splashes.filter(s => s.life > 0);
+  // Grade
+  ctx.font = `${50}px serif`;
+  ctx.textAlign = 'center';
+  ctx.fillText(grade.e, W / 2, H * 0.13);
+
+  ctx.fillStyle = '#fff';
+  ctx.font = `bold ${24 * Math.min(scale, 1.3)}px system-ui, sans-serif`;
+  ctx.fillText("TIME'S UP!", W / 2, H * 0.21);
+
+  // Grade letter with glow
+  ctx.shadowColor = grade.c; ctx.shadowBlur = 30;
+  ctx.fillStyle = grade.c;
+  ctx.font = `bold ${90 * Math.min(scale, 1.3)}px system-ui, sans-serif`;
+  ctx.fillText(grade.l, W / 2, H * 0.38);
+  ctx.shadowBlur = 0;
+
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = `${16 * Math.min(scale, 1.2)}px system-ui, sans-serif`;
+  ctx.fillText(grade.t, W / 2, H * 0.44);
+
+  // Stats card
+  const cw = Math.min(300, W * 0.8), ch = 160;
+  const cx = (W - cw) / 2, cy = H * 0.48;
+  ctx.fillStyle = 'rgba(30, 41, 59, 0.8)';
+  ctx.strokeStyle = '#334155';
+  ctx.lineWidth = 1;
+  roundRect(cx, cy, cw, ch, 16);
+  ctx.fill(); ctx.stroke();
+
+  const stats = [
+    { label: 'Score', value: `⭐ ${Math.floor(score)}`, color: '#FFD700' },
+    { label: 'Accuracy', value: `${accuracy}%`, color: accuracy > 70 ? '#22c55e' : '#ef4444' },
+    { label: 'Max Combo', value: `🔥 ${maxCombo}`, color: '#f59e0b' },
+    { label: 'Mess Level', value: `${Math.floor(messLevel)}%`, color: messLevel < 40 ? '#22c55e' : '#ef4444' },
+  ];
+
+  stats.forEach((s, i) => {
+    const sy = cy + 25 + i * 34;
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = `${13}px system-ui, sans-serif`;
+    ctx.textAlign = 'left';
+    ctx.fillText(s.label, cx + 20, sy);
+    ctx.fillStyle = s.color;
+    ctx.font = `bold ${16}px system-ui, sans-serif`;
+    ctx.textAlign = 'right';
+    ctx.fillText(s.value, cx + cw - 20, sy);
+  });
+
+  // High score
+  const hs = parseInt(localStorage.getItem('toilet_hs') || '0');
+  if (score > hs) {
+    localStorage.setItem('toilet_hs', Math.floor(score));
+    ctx.fillStyle = '#FFD700';
+    ctx.font = `bold ${16 * Math.min(scale, 1.2)}px system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.fillText('🎉 NEW HIGH SCORE! 🎉', W / 2, H * 0.82);
   }
+
+  // Restart
+  ctx.fillStyle = '#64748b';
+  ctx.font = `${14 * Math.min(scale, 1.2)}px system-ui, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.fillText('Tap anywhere to retry', W / 2, H * 0.9);
 }
 
-function draw() {
+// ── Game Update ──
+function update() {
+  if (state !== 'playing') return;
+
+  timeLeft--;
+  if (timeLeft <= 0) { state = 'results'; return; }
+
+  // Difficulty ramps
+  difficulty = 1 + (1 - timeLeft / (maxTime * 60)) * 3;
+
+  // Move toilet
+  const speed = 1.5 + difficulty * 1.2;
+  toiletVX = toiletVX > 0 ? speed : -speed;
+  toiletX += toiletVX;
+  if (toiletX > W - toiletW * 0.7 || toiletX < toiletW * 0.7) toiletVX *= -1;
+
+  // Random direction changes
+  if (Math.random() < 0.008 * difficulty) toiletVX *= -1;
+
+  // Guy follows mouse with slight lag
+  guyX += (mouseX - guyX) * 0.15;
+  guyX = Math.max(30, Math.min(W - 30, guyX));
+
+  // Stream end point (with wobble)
+  const wobble = (Math.sin(Date.now() / 120) + Math.sin(Date.now() / 77) * 0.5) * (5 + difficulty * 3);
+  const streamEndX = guyX + wobble;
+  const fy = floorY();
+
+  // Hit detection
+  const inBowl = Math.abs(streamEndX - toiletX) < (toiletW / 2 - 5);
+
+  if (inBowl) {
+    hits++;
+    combo++;
+    maxCombo = Math.max(maxCombo, combo);
+    const comboMultiplier = 1 + Math.min(combo, 20) * 0.15;
+    score += 1 * comboMultiplier;
+
+    // Splash in bowl
+    if (Math.random() < 0.3) {
+      drops.push({
+        x: streamEndX + (Math.random() - 0.5) * 10,
+        y: fy - 5,
+        vx: (Math.random() - 0.5) * 1.5,
+        vy: -1 - Math.random() * 1.5,
+        life: 20, r: 1.5,
+      });
+    }
+  } else {
+    misses++;
+    combo = 0;
+    messLevel = Math.min(100, messLevel + 0.25 + difficulty * 0.1);
+
+    // Floor puddle
+    if (Math.random() < 0.5) {
+      puddles.push({
+        x: streamEndX + (Math.random() - 0.5) * 15,
+        y: fy + 5 + Math.random() * 30,
+        r: 3 + Math.random() * 5,
+        a: Math.random() * Math.PI,
+        opacity: 0.8,
+      });
+      if (puddles.length > 150) puddles.shift();
+    }
+
+    // Splatter
+    for (let i = 0; i < 2; i++) {
+      drops.push({
+        x: streamEndX, y: fy + 5,
+        vx: (Math.random() - 0.5) * 4,
+        vy: -1 - Math.random() * 4,
+        life: 25 + Math.random() * 15,
+        r: 1 + Math.random() * 2,
+      });
+    }
+
+    // Screen shake on bad miss
+    if (messLevel > 50) {
+      shakeX = (Math.random() - 0.5) * 4;
+      shakeY = (Math.random() - 0.5) * 4;
+    }
+  }
+
+  // Combo floater
+  if (combo > 0 && combo % 10 === 0) {
+    floaters.push({ x: W / 2, y: H * 0.5, text: `🔥 ${combo} COMBO!`, life: 90, color: '#f59e0b' });
+  }
+
+  // Update drops
+  drops.forEach(d => { d.x += d.vx; d.y += d.vy; d.vy += 0.15; d.life--; });
+  drops = drops.filter(d => d.life > 0);
+
+  // Update floaters
+  floaters.forEach(f => { f.y -= 1; f.life--; });
+  floaters = floaters.filter(f => f.life > 0);
+
+  // Decay puddle opacity
+  puddles.forEach(p => { p.opacity = Math.max(0.2, p.opacity - 0.001); });
+
+  // Shake decay
+  shakeX *= 0.85; shakeY *= 0.85;
+}
+
+// ── Render ──
+function render() {
   ctx.clearRect(0, 0, W, H);
 
-  // Background
-  if (state === 'menu' || state === 'results') {
-    ctx.fillStyle = '#0f172a';
-    ctx.fillRect(0, 0, W, H);
-  } else {
-    // Bathroom wall
-    ctx.fillStyle = '#b8d4e3';
-    ctx.fillRect(0, 0, W, H);
+  if (state === 'title') { drawTitle(); }
+  else if (state === 'ready') { drawReady(); }
+  else if (state === 'results') { drawResults(); }
+  else if (state === 'playing') {
+    ctx.save();
+    ctx.translate(shakeX, shakeY);
+
+    drawBathroom();
+    drawToilet(toiletX);
+
+    // Guy & stream
+    const guyBottom = drawGuy(guyX);
+    const wobble = (Math.sin(Date.now() / 120) + Math.sin(Date.now() / 77) * 0.5) * (5 + difficulty * 3);
+    const streamEndX = guyX + wobble;
+    const inBowl = Math.abs(streamEndX - toiletX) < (toiletW / 2 - 5);
+    drawStream(guyBottom.x, guyBottom.y, streamEndX, floorY() - 5, inBowl);
+
+    // Drops
+    for (const d of drops) {
+      ctx.beginPath(); ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(255, 215, 0, ${d.life / 30})`;
+      ctx.fill();
+    }
+
+    // Floaters
+    for (const f of floaters) {
+      ctx.fillStyle = f.color;
+      ctx.globalAlpha = Math.min(1, f.life / 30);
+      ctx.font = `bold ${20}px system-ui, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText(f.text, f.x, f.y);
+      ctx.globalAlpha = 1;
+    }
+
+    ctx.restore();
+    drawHUD();
   }
 
-  if (state === 'menu') drawMenu();
-  else if (state === 'game1') drawGame1();
-  else if (state === 'game2') drawGame2();
-  else if (state === 'game3') drawGame3();
-  else if (state === 'results') drawResults();
-
-  // Draw particles
-  for (const p of particles) {
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-    ctx.fillStyle = p.color;
-    ctx.globalAlpha = p.life / p.maxLife;
-    ctx.fill();
-    ctx.globalAlpha = 1;
-  }
-
-  // Draw text splashes
-  for (const s of splashes) {
-    ctx.fillStyle = s.color;
-    ctx.font = 'bold 16px "Comic Sans MS"';
-    ctx.textAlign = 'center';
-    ctx.globalAlpha = s.life / 60;
-    ctx.fillText(s.text, s.x, s.y - (60 - s.life));
-    ctx.globalAlpha = 1;
-  }
-
-  requestAnimationFrame(draw);
+  requestAnimationFrame(render);
 }
 
 setInterval(update, 1000 / 60);
-draw();
+render();
 </script>
 </body>
 </html>
